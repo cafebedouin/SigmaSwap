@@ -392,12 +392,16 @@ sub main_view {
         child(token_dropdown('from', $reg, \@from_ids, $s->{from}, 'Select token', $sort), align => 'JUSTIFY'),
     );
     if ($from) {
+        # ERG is entered in the wallet's own amount field: the user can switch it to their fiat
+        # currency, and the other of the two is shown underneath. Its value is nanoERG either way,
+        # so nothing else changes. Without a fiat rate in the wallet it is a plain ERG field.
+        my $is_erg = $from->{id} eq ERG;
         push @form, child(O(
-            type => 'DecimalInputField', id => "amount_$from->{decimals}",
+            type => ($is_erg ? 'FiatOrErgAmountInputField' : 'DecimalInputField'), id => "amount_$from->{decimals}",
             value => defined $s->{amount} ? N($s->{amount}) : undef,
             placeholder => "Amount of $from->{ticker}",
             onValueChanged => 'clearQuote', onImeAction => 'preview', minValue => N(1),
-            imeActionType => 'DONE', scale => N($from->{decimals}),
+            imeActionType => 'DONE', scale => ($is_erg ? undef : N($from->{decimals})),
         ), align => 'JUSTIFY');
         # A token balance can be put in whole with one tap. Not ERG: an address emptied of ERG
         # cannot pay for its next transaction.
