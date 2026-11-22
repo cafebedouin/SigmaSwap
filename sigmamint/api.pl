@@ -69,7 +69,8 @@ $KIND = 'token' unless defined $KIND && $KIND eq 'nft';
 my $SESSION = $cgi->url_param('s');
 $SESSION = new_session() unless session_ok($SESSION);
 
-my %mosaik  = ('' => \&act_app, home => \&act_home, form => \&act_form, preview => \&act_preview, status => \&act_status);
+my %mosaik  = ('' => \&act_app, home => \&act_home, form => \&act_form, preview => \&act_preview, status => \&act_status,
+               file => \&act_file);
 my %plain   = (notify => \&act_notify);
 my %browser = (config => \&web_config, upload => \&web_upload);
 
@@ -299,22 +300,27 @@ sub form_view {
                         'BODY2', color => 'SECONDARY'), align => 'START');
     }
     else {
-        my $file = load_record(session_key($SESSION));
-        push @form, child(label('Picture, sound or video', 'BODY1BOLD'), align => 'START');
-        if ($file && $file->{cid}) {
-            push @form, child(label("\x{2713} " . ucfirst($file->{media}) . ' added', 'BODY1', color => 'PRIMARY'), align => 'START'),
-                        button('Choose a different file', 'openWeb', style => 'TEXT');
-        }
-        else {
-            push @form,
-                button('Choose file', 'openWeb', style => 'SECONDARY'),
-                child(label('This opens a page where you pick the file from your phone. When it says the file is '
-                            . 'added, come back here and tap Preview.', 'BODY2', color => 'SECONDARY'), align => 'START');
-        }
+        push @form, child(label('Picture, sound or video', 'BODY1BOLD'), align => 'START'),
+                    child(file_view(), align => 'JUSTIFY');
     }
     push @kids, child(card(column(\@form, padding => 'DEFAULT', spacing => 'HALF_DEFAULT')), align => 'JUSTIFY');
     push @kids, child($result || result_placeholder(), align => 'JUSTIFY');
     return column(\@kids, id => 'main', padding => 'DEFAULT', spacing => 'DEFAULT');
+}
+
+# The file part of the NFT form is an element of its own ('file'). Nothing tells the wallet that
+# the browser page finished, so the user says so with "I added the file", which replaces just
+# this part: what was typed, and the place on the screen, stay as they are.
+sub file_view {
+    my $file = load_record(session_key($SESSION));
+    my @rows = ($file && $file->{cid})
+        ? (child(label("\x{2713} " . ucfirst($file->{media}) . ' added', 'BODY1', color => 'PRIMARY'), align => 'START'),
+           button('Choose a different file', 'openWeb', style => 'TEXT'))
+        : (button('Choose file', 'openWeb', style => 'SECONDARY'),
+           child(label('This opens a page where you pick the file from your phone. When it says the file is '
+                       . 'added, come back here and tap "I added the file".', 'BODY2', color => 'SECONDARY'), align => 'START'),
+           button('I added the file', 'fileAdded', style => 'TEXT'));
+    return column(\@rows, id => 'file', spacing => 'HALF_DEFAULT');
 }
 
 sub base_actions {
@@ -326,6 +332,7 @@ sub base_actions {
         O(type => 'BackendRequestAction', url => "$API?action=home",         id => 'home',    postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=preview&k=$KIND&s=$SESSION", id => 'preview', postValues => 'VALID'),
         O(type => 'BrowserAction', url => "$BASE/?s=$SESSION", id => 'openWeb'),
+        O(type => 'BackendRequestAction', url => "$API?action=file&k=nft&s=$SESSION", id => 'fileAdded', postValues => 'NONE'),
         O(type => 'ChangeSiteAction', id => 'clearResult', newContent => O(view => result_placeholder())),
     );
 }
@@ -360,6 +367,13 @@ sub act_app {
 
 sub act_home { mosaik_replace(home_view()) }
 sub act_form { mosaik_replace(form_view(posted_values())) }
+
+sub act_file {    # "I added the file"
+    my $file = load_record(session_key($SESSION));
+    return mosaik_dialog('No file has arrived yet. Tap "Choose file", wait until the page says the file is added, then come back.')
+        unless $file && $file->{cid};
+    mosaik_replace(file_view());
+}
 
 sub act_preview {
     my $v = posted_values();
