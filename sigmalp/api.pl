@@ -4,10 +4,11 @@
 #   https://<host>/cgi-bin/sigmaswap/sigmalp/
 #
 #   Mosaik
-#     GET  api.pl                    -> start screen: "Add liquidity" / "Your positions"
+#     GET  api.pl                    -> start screen: wallet address, then "Add liquidity" / "Your positions"
 #     POST api.pl?action=add         -> the add form        ?action=addq  -> preview + button
 #          (either amount may be typed; addq&side=&lx=&ly= says what the last preview showed)
 #     POST api.pl?action=pos         -> choose address       ?action=posq  -> positions + withdraw buttons
+#          (the address chosen on the start screen travels with every screen; with one, pos is posq)
 #     POST api.pl?action=status&n=   -> what happened        GET ?action=notify -> wallet notification check
 #   ErgoPay
 #     GET  api.pl?action=ergopay&op=add|remove&...
@@ -45,6 +46,9 @@ $action = '' unless defined $action;
 
 my %mosaik = ('' => \&act_app, home => \&act_home, add => \&act_add, addq => \&act_addq,
               pos => \&act_pos, posq => \&act_posq, status => \&act_status);
+
+# "Your positions" with an address already chosen: show them straight away
+$action = 'posq' if $action eq 'pos' && good_address(posted_values()->{address});
 
 if ($cgi->cgi_error) { die_json('Bad request') }
 elsif ($action eq 'ergopay') {
@@ -129,7 +133,8 @@ sub scale {    # n * bps / 10000, rounded down (scalar on purpose: bdiv returns 
 
 sub base_actions {
     return (
-        O(type => 'BackendRequestAction', url => "$API?action=home", id => 'home',   postValues => 'NONE'),
+        # VALID, not NONE: the chosen address goes back to the start screen with the user
+        O(type => 'BackendRequestAction', url => "$API?action=home", id => 'home',   postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=add",  id => 'goAdd',  postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=pos",  id => 'goPos',  postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=addq", id => 'preview', postValues => 'VALID'),
@@ -155,18 +160,24 @@ sub header_rows {
             child(row([ child(label($title, 'HEADLINE2'), weight => N(1)), button('Change', 'home', style => 'TEXT') ]), align => 'JUSTIFY'));
 }
 sub address_card {
-    my ($addr, $on_change) = @_;
+    my ($addr, $on_change, $note) = @_;
     return child(card(column([
         child(label('Your wallet address', 'BODY1BOLD'), align => 'START'),
         O(type => 'ErgoAddressChooseButton', id => 'address', value => $addr, onValueChanged => $on_change,
           style => $addr ? 'BUTTON_SECONDARY' : undef),
+        defined $note ? child(label($note, 'BODY2', color => 'SECONDARY'), align => 'START') : (),
     ], padding => 'DEFAULT', spacing => 'HALF_DEFAULT')), align => 'JUSTIFY');
 }
 
+# The start screen asks for the address first. It is an input like any other, so it is posted
+# along when a button leads on, and each screen shows it again: chosen once, kept everywhere.
+# Coming back from a status screen there is no input to post, so that link names it (addr=).
 sub home_view {
+    my $addr = good_address(posted_values()->{address}) || good_address($cgi->url_param('addr'));
     return column([
         label('SigmaLP', 'HEADLINE1', color => 'PRIMARY'),
         label('Provide liquidity to the ErgoDex pools', 'BODY2', color => 'SECONDARY', talign => 'CENTER'),
+        address_card($addr, 'home', $addr ? undef : 'Choose it once here. It is used for your positions and for adding liquidity.'),
         child(card(column([
             child(label('Add liquidity', 'HEADLINE2'), align => 'START'),
             child(label('Put two tokens into a pool, in the pool\'s current ratio. You receive LP tokens that stand '
@@ -290,11 +301,13 @@ sub sign_actions {    # (ErgoPayAction, its status action) tied together by a fr
     my ($id, $url) = @_;
     my $nonce = new_nonce();
     my $ok = defined $nonce && record_file($nonce);
+    my ($addr) = $url =~ /&addr=([1-9A-HJ-NP-Za-km-z]{40,60})\z/;    # so "Done" can lead back with it
     my @a;
     if ($ok) {
         $url .= "&n=$nonce";
         watch_add('lp', $nonce);
-        push @a, O(type => 'BackendRequestAction', url => "$API?action=status&n=$nonce", id => "st_$id", postValues => 'NONE');
+        push @a, O(type => 'BackendRequestAction', url => "$API?action=status&n=$nonce" . ($addr ? "&addr=$addr" : ''),
+                   id => "st_$id", postValues => 'NONE');
     }
     push @a, O(type => 'ErgoPayAction', url => $url, id => $id, onFinished => $ok ? "st_$id" : 'home');
     return @a;
@@ -404,9 +417,12 @@ sub describe_change {
 sub act_status {
     my $nonce = $cgi->url_param('n');
     return mosaik_dialog('Unknown request.') unless defined $nonce && $nonce =~ /^[0-9a-f]{32}\z/;
-    my $self  = O(type => 'BackendRequestAction', url => "$API?action=status&n=$nonce", id => 'status', postValues => 'NONE');
+    my $addr  = good_address($cgi->url_param('addr'));
+    my $with  = $addr ? "&addr=$addr" : '';
+    my $self  = O(type => 'BackendRequestAction', url => "$API?action=status&n=$nonce$with", id => 'status', postValues => 'NONE');
+    my $back  = O(type => 'BackendRequestAction', url => "$API?action=home$with", id => 'done', postValues => 'NONE');
     my $again = button('Refresh status', 'status', style => 'SECONDARY');
-    my $home  = button('Done', 'home', style => 'TEXT');
+    my $home  = button('Done', 'done', style => 'TEXT');
     my $row   = sub { child(label($_[0], $_[1] || 'BODY1'), align => 'START') };
     my $rec   = load_record($nonce);
     my @rows;
@@ -430,7 +446,7 @@ sub act_status {
         }
     }
     mosaik_replace(column([ label('SigmaLP', 'HEADLINE1', color => 'PRIMARY'), child(result_box(\@rows), align => 'JUSTIFY') ],
-                          id => 'main', padding => 'DEFAULT', spacing => 'DEFAULT'), $self);
+                          id => 'main', padding => 'DEFAULT', spacing => 'DEFAULT'), $self, $back);
 }
 
 sub act_notify {
