@@ -6,6 +6,7 @@
 #   Mosaik (Ergo wallet in-app dApps)
 #     GET  api.pl                    -> MosaikApp JSON (the whole view)
 #     POST api.pl?action=refresh     -> re-render the form from the posted input values
+#          (&max=1: with the amount set to the address's whole balance of the pay token)
 #     POST api.pl?action=flip        -> same, with pay/receive tokens exchanged
 #     POST api.pl?action=quote       -> price the swap, show details + Swap button
 #     POST api.pl?action=orders      -> list the address's open swap orders (cancel buttons)
@@ -398,8 +399,14 @@ sub main_view {
             onValueChanged => 'clearQuote', onImeAction => 'preview', minValue => N(1),
             imeActionType => 'DONE', scale => N($from->{decimals}),
         ), align => 'JUSTIFY');
-        push @form, child(label('Balance: ' . fmt_amount($balance, $from->{decimals}) . " $from->{ticker}",
-                                'BODY2', color => 'SECONDARY'), align => 'END') if defined $balance;
+        # A token balance can be put in whole with one tap. Not ERG: an address emptied of ERG
+        # cannot pay for its next transaction.
+        my $all = defined $balance && $from->{id} ne ERG && "$balance" =~ /^[1-9]\d{0,18}\z/;
+        push @form, child(row([
+            child(label('Balance: ' . fmt_amount($balance, $from->{decimals}) . " $from->{ticker}",
+                        'BODY2', color => 'SECONDARY', talign => 'END'), weight => N(1)),
+            $all ? button('Use all', 'useAll', style => 'TEXT') : (),
+        ], spacing => 'HALF_DEFAULT'), align => 'JUSTIFY') if defined $balance;
     }
     push @form,
         button("\x{21C5}  Switch", 'flip', style => 'TEXT', enabled => (defined $s->{to} ? 1 : 0)),
@@ -458,6 +465,7 @@ sub base_actions {
         O(type => 'BackendRequestAction', url => "$API?action=flip$m",    id => 'flip',    postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=quote$m",   id => 'preview', postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=orders$m",  id => 'orders',  postValues => 'VALID'),
+        O(type => 'BackendRequestAction', url => "$API?action=refresh$m&max=1", id => 'useAll', postValues => 'VALID'),
         O(type => 'ReloadAction', id => 'reload'),
         # local (no network): typing a new amount drops a quote that no longer matches it
         O(type => 'ChangeSiteAction', id => 'clearQuote', newContent => O(view => quote_placeholder())),
@@ -524,7 +532,10 @@ sub act_refresh {
     my $reg = registry();
     my $s   = clean_state(posted_values(), $reg);
     fill_price($reg, $s, ($cgi->url_param('reset') // '') eq '1');
-    mosaik_replace(main_view($reg, $s, lookup_balance($s)));
+    my $balance = lookup_balance($s);
+    $s->{amount} = "$balance"    # "Use all"
+        if ($cgi->url_param('max') // '') eq '1' && defined $balance && $s->{from} ne ERG && "$balance" =~ /^[1-9]\d{0,18}\z/;
+    mosaik_replace(main_view($reg, $s, $balance));
 }
 
 sub act_flip {
