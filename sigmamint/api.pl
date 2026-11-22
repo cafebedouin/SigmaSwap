@@ -394,8 +394,18 @@ sub act_preview {
         kv_row('Network fee', fmt_amount($fee, 9) . ' ERG'),
         child(label('About 0.001 ERG also moves into the box that holds your new '
                     . ($KIND eq 'nft' ? 'NFT' : 'tokens') . '. It stays yours.', 'BODY2', color => 'SECONDARY'), align => 'START'),
-        child(label('A mint cannot be undone or edited afterwards. Check the name and the numbers.', 'BODY2BOLD'), align => 'START'),
-        button($KIND eq 'nft' ? 'Mint NFT' : 'Mint token', 'pay');
+        child(label('A mint cannot be undone or edited afterwards. Check the name and the numbers.', 'BODY2BOLD'), align => 'START');
+    # Enough ERG for the fee, the new box and the change box? Say so here, as the swap and
+    # liquidity previews do, not only when the wallet asks for the transaction. An estimate
+    # (the builder decides for real); if the balance cannot be read the button is shown.
+    my $need = $fee + 2000000;
+    my $bal  = chain('balance', { address => $v->{address}, token => ERG });
+    if ($bal->{ok} && ($bal->{balance} // '') =~ /^\d+\z/ && Math::BigInt->new($bal->{balance})->bcmp($need) < 0) {
+        push @rows, label('Not enough ERG: this address holds ' . fmt_amount($bal->{balance}, 9) . ' ERG, and a mint needs about '
+                          . fmt_amount($need, 9) . ' ERG.', 'BODY1', talign => 'CENTER'),
+                    button('Check again', 'preview', style => 'SECONDARY');
+    }
+    else { push @rows, button($KIND eq 'nft' ? 'Mint NFT' : 'Mint token', 'pay') }
     mosaik_replace(result_box(\@rows),
         O(type => 'BackendRequestAction', url => "$API?action=status&k=$KIND&s=$SESSION&n=$nonce", id => 'status', postValues => 'NONE'),
         O(type => 'ErgoPayAction', id => 'pay', onFinished => 'status',
