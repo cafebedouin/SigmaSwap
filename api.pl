@@ -9,7 +9,7 @@
 #     POST api.pl?action=flip        -> same, with pay/receive tokens exchanged
 #     POST api.pl?action=quote       -> price the swap, show details + Swap button
 #     POST api.pl?action=orders      -> list the address's open swap orders (cancel buttons)
-#     POST api.pl?action=home        -> the start screen (choose direct swap or order)
+#     POST api.pl?action=home        -> the start screen (wallet address, then direct swap or order)
 #     POST api.pl?action=status&n=   -> what happened to the swap/order just signed
 #   (&mode=direct|order on every Mosaik action says which of the two screens is open)
 #   ErgoPay (EIP-20), fetched by the wallet when the user taps Swap
@@ -37,7 +37,7 @@ use File::Spec;
 use AppConfig qw(cfg base_url chain);
 use MosaikKit;
 
-use constant APP_VERSION => 11;     # bump when the Mosaik view changes: open wallets reload
+use constant APP_VERSION => 12;     # bump when the Mosaik view changes: open wallets reload
 use constant ERG         => '0' x 64;
 use constant SLIPPAGE    => (50 => '0.5 %', 100 => '1 %', 300 => '3 %', 1000 => '10 %');
 
@@ -279,6 +279,19 @@ sub home_view {
     }
     my $order_fee = fmt_amount(cfg('ORDER_MIN_EX_FEE', 6000000), 9);
 
+    # The address comes first. It is an input like any other, so it is posted along when a
+    # button leads on and every screen shows it again: chosen once, kept everywhere.
+    my $addr = posted_values()->{address};
+    $addr = undef unless defined $addr && !ref $addr && $addr =~ /^[1-9A-HJ-NP-Za-km-z]{40,60}\z/;
+    push @kids, child(card(column([
+        child(label('Your wallet address', 'BODY1BOLD'), align => 'START'),
+        O(type => 'ErgoAddressChooseButton', id => 'address', value => $addr, onValueChanged => 'homeAddr',
+          style => $addr ? 'BUTTON_SECONDARY' : undef),
+        $addr ? () : child(label('Choose it once here. Every swap screen uses it.', 'BODY2', color => 'SECONDARY'), align => 'START'),
+    ], padding => 'DEFAULT', spacing => 'HALF_DEFAULT')), align => 'JUSTIFY');
+    # orders already waiting are this address's funds: reachable without picking a swap type first
+    push @kids, child(orders_placeholder($addr), align => 'JUSTIFY') if $addr;
+
     push @kids, child(card(column([
         child(label('Direct swap', 'HEADLINE2'), align => 'START'),
         child(label('One transaction between your wallet and the pool. You receive exactly the amount you are shown, '
@@ -437,7 +450,10 @@ sub base_actions {
         O(type => 'BackendRequestAction', url => "$API?action=refresh&mode=order",  id => 'goOrder',  postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=refresh&mode=limit",  id => 'goLimit',  postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=refresh$m&reset=1",   id => 'resetPrice', postValues => 'VALID'),
-        O(type => 'BackendRequestAction', url => "$API?action=home&simple=$SIMPLE", id => 'home',     postValues => 'NONE'),
+        # VALID, not NONE: the chosen address goes back to the start screen with the user
+        O(type => 'BackendRequestAction', url => "$API?action=home&simple=$SIMPLE", id => 'home',     postValues => 'VALID'),
+        # the address was chosen on the start screen: no simple= here, the switch on that screen is posted
+        O(type => 'BackendRequestAction', url => "$API?action=home",                id => 'homeAddr', postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=refresh$m", id => 'refresh', postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=flip$m",    id => 'flip',    postValues => 'VALID'),
         O(type => 'BackendRequestAction', url => "$API?action=quote$m",   id => 'preview', postValues => 'VALID'),
